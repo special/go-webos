@@ -55,6 +55,80 @@ func (tv *TV) Command(uri Command, req Payload) (Message, error) {
 	})
 }
 
+type Subscription struct {
+	Messages <-chan Message
+
+	tv          *TV
+	id          string
+	rawMessages <-chan Message
+	outMessages chan Message
+	err         error
+}
+
+func (s *Subscription) Error() error {
+	return s.err
+}
+
+func (s *Subscription) MessageHandler() {
+	defer s.Close()
+	defer close(s.outMessages)
+	for {
+		select {
+		case msg, ok := <-s.rawMessages:
+			if !ok {
+				if s.err == nil {
+					s.err = fmt.Errorf("subscription channel closed")
+				}
+				return
+			}
+			if err := msg.Validate(); err != nil {
+				s.err = err
+				return
+			}
+			s.outMessages <- msg
+		}
+	}
+}
+
+func (s *Subscription) Close() {
+	s.tv.teardownResponseChannel(s.id)
+}
+
+// Subscribe creates a subscription to receive updates when a value changes
+func (tv *TV) Subscribe(uri Command, req Payload) (*Subscription, error) {
+	msg := &Message{
+		Type:    SubscribeMessageType,
+		ID:      requestID(),
+		URI:     uri,
+		Payload: req,
+	}
+
+	b, err := json.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("could not marshall request: %v", err)
+	}
+
+	subscription := &Subscription{
+		tv:          tv,
+		id:          msg.ID,
+		rawMessages: tv.setupResponseChannel(msg.ID),
+		outMessages: make(chan Message, 2),
+	}
+	subscription.Messages = subscription.outMessages
+	go subscription.MessageHandler()
+
+	tv.wsMutex.Lock()
+	err = tv.ws.WriteMessage(websocket.TextMessage, b)
+	tv.wsMutex.Unlock()
+
+	if err != nil {
+		subscription.Close()
+		return nil, fmt.Errorf("could not write to socket: %v", err)
+	}
+
+	return subscription, nil
+}
+
 // MessageHandler listens to the TVs websocket and reads responses.
 // Responses are read into a Message type and added to appropriate channel
 // based on the Message.ID.

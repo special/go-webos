@@ -22,6 +22,9 @@ const (
 
 	// ResponseMessageType is returned by the TV in response to a request.
 	ResponseMessageType MessageType = "response"
+
+	// SubscribeMessageType is sent to the TV when creating a subscription
+	SubscribeMessageType MessageType = "subscribe"
 )
 
 // Message represents the JSON message format used in request and responses to
